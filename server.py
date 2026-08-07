@@ -1,36 +1,33 @@
 from socket import socket, AF_INET, SOCK_STREAM
 import os
 from datetime import datetime, timezone
+from concurrent.futures import ThreadPoolExecutor
 
-def main():
-    PORT = 8080
-    BUFFER = 1024
+PORT = 8080
+BUFFER = 4096
+MAX_THREADS = 100
 
-    server_socket = socket(AF_INET, SOCK_STREAM)
-    server_socket.bind(("", PORT))
-    server_socket.listen(1)
-
-    print("Server Ready...")
-    while True:
-        connection_socket, addr = server_socket.accept()
-
+def handle_client(connection_socket):
+    try:
         client_message = connection_socket.recv(BUFFER).decode()
         if not client_message:
             connection_socket.close()
-            continue
+            return
 
         print("Client Message: \n", client_message)
 
         request_line = client_message.split("\r\n")[0]
         request_parts = request_line.split(" ")
+        if len(request_parts) < 3:
+            return
         filename = request_parts[1][1:]
         http_version = request_parts[2].strip()
 
         if http_version not in ["HTTP/1.0", "HTTP/1.1"]:
-            error_header = f" {http_version} 505 HTTP Version Not Supported\r\n\r\n"
+            error_header = f"{http_version} 505 HTTP Version Not Supported\r\n\r\n"
             connection_socket.send(error_header.encode())
             connection_socket.close()
-            continue
+            return
 
         if not os.path.exists(filename):
             error_header = "HTTP/1.1 404 Not Found\r\n\r\n"
@@ -84,8 +81,30 @@ def main():
                 success_header = "HTTP/1.1 200 OK\r\n\r\n"
                 connection_socket.send(success_header.encode())
                 connection_socket.send(file_data)
-
+    finally:
         connection_socket.close()
+
+
+def main():
+    server_socket = socket(AF_INET, SOCK_STREAM)
+    server_socket.bind(("", PORT))
+    server_socket.listen(5)
+
+    print("Server Ready...")
+    with ThreadPoolExecutor(max_workers=MAX_THREADS) as executor:
+        while True:
+            try:
+                connection_socket, addr = server_socket.accept()
+                executor.submit(handle_client, connection_socket)
+            except KeyboardInterrupt:
+                print("\nShutting down server...")
+                break
+            except Exception as e:
+                print(f"Error: {e}")
+    server_socket.close()
+    
+        
+        
 
 if __name__ == "__main__":
     main()
